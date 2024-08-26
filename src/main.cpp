@@ -1,5 +1,4 @@
 #include <Arduino.h>
-#include <ArduinoLowPower.h>
 
 //Pinout
 constexpr int Pin_Motor_Direction 	= 12;
@@ -10,49 +9,28 @@ constexpr int Pin_Switch_LimitMin 	= 8;
 constexpr int Pin_Switch_LimitMax 	= 7;
 constexpr int Pin_RaspPi_Power 		= 6;
 
-constexpr int StepperPulseDuration  = 10000;
+constexpr int StepperPulseDuration  = 1000;
 
-bool bIsPiPowered = true; //initially will be on.
-bool bPrevDrawerIsOpen = false;
-bool bDrawerIsOpen = false;
-bool bMotorDirection = false;
-bool bActuateMotor = false;
-bool bMotorDirectionChangeDetected = false;
+bool bShouldRaspberryPiBePowered = true;
+bool bIsRaspberryPiPowered = true; //will power on automatically.
+bool bIsProcessing = true;
 
 #define GO_UP true
 #define GO_DOWN false
 
-bool PollIsKeyboardDrawerOpen()
-{
-	bPrevDrawerIsOpen = bDrawerIsOpen;
-	bDrawerIsOpen = digitalRead(Pin_Switch_Drawer);
-	return bDrawerIsOpen;
-}
-
-bool HasKeyboardDrawerStatusChanged()
-{
-	return bDrawerIsOpen != bPrevDrawerIsOpen;
-}
-
-bool IsMaxLimitTriggered()
-{
-	return digitalRead(Pin_Switch_LimitMax);
-}
-
-bool IsMinLimitTriggered()
-{
-	return digitalRead(Pin_Switch_LimitMin);
-}
+//motor is active low. So define these for readability sake.
+#define MOTOR_OFF true
+#define MOTOR_ON false
 
 void OnDrawerStateChanged_ISR()
 {
-	bMotorDirectionChangeDetected = true;
+	bIsProcessing = true;
 }
 
 void OnLimitHit_ISR()
 {
-	bActuateMotor = false;
-	digitalWrite(Pin_Motor_Enable, LOW);
+	//kill motor power immediately.
+	digitalWrite(Pin_Motor_Enable, MOTOR_OFF);
 }
 
 void setup()
@@ -66,7 +44,7 @@ void setup()
 	//Interrupts
 	attachInterrupt(Pin_Switch_LimitMin, OnLimitHit_ISR, RISING);
 	attachInterrupt(Pin_Switch_LimitMin, OnLimitHit_ISR, RISING);
-	LowPower.attachInterruptWakeup(Pin_Switch_Drawer, OnDrawerStateChanged_ISR, CHANGE);
+	attachInterrupt(Pin_Switch_Drawer, OnDrawerStateChanged_ISR, CHANGE);
 
 	//Power on, initial state.
 	OnDrawerStateChanged_ISR();
@@ -74,68 +52,63 @@ void setup()
 
 void HandleRaspberryPiPowerState()
 {
-	const bool bPiShouldBePowered = bMotorDirection == GO_UP;
-
-	if (bPiShouldBePowered != bIsPiPowered)
+	if (bShouldRaspberryPiBePowered == bIsRaspberryPiPowered)
 	{
-		digitalWrite(Pin_RaspPi_Power, true);
-		delay(100);
-		digitalWrite(Pin_RaspPi_Power, false);
-
-		if (bPiShouldBePowered == false)
-		{
-			delay(1000);
-			digitalWrite(Pin_RaspPi_Power, true);
-			delay(100);
-			digitalWrite(Pin_RaspPi_Power, false);
-		}
+		return;
 	}
-	bIsPiPowered = bPiShouldBePowered;
+
+	bIsRaspberryPiPowered = bShouldRaspberryPiBePowered;
+
+	digitalWrite(Pin_RaspPi_Power, true);
+	delay(500);
+	digitalWrite(Pin_RaspPi_Power, false);
 }
 
-void HandleMotorModeChange()
+bool SeekMotorTowardsTarget()
 {
-	bMotorDirectionChangeDetected |= HasKeyboardDrawerStatusChanged();
-	if (bMotorDirectionChangeDetected)
+	const bool bIsDrawerOpen = digitalRead(Pin_Switch_Drawer);
+	bShouldRaspberryPiBePowered = bIsDrawerOpen;
+
+	if (bIsDrawerOpen == true && digitalRead(Pin_Switch_LimitMax) == false)
 	{
-		if (bDrawerIsOpen)
-		{
-			//Raise
-			bActuateMotor = !IsMaxLimitTriggered();
-			bMotorDirection = GO_UP;
-		}
-		else
-		{
-			//Retract
-			bActuateMotor = !IsMinLimitTriggered();
-			bMotorDirection = GO_DOWN;
-		}
+		//Raise
+		digitalWrite(Pin_Motor_Direction, GO_UP);
+		digitalWrite(Pin_Motor_Enable, MOTOR_ON);
 
-		if (bActuateMotor)
-		{
-			digitalWrite(Pin_Motor_Direction, bMotorDirection);
-		}
-		digitalWrite(Pin_Motor_Direction, bActuateMotor);
-
-	}
-	bMotorDirectionChangeDetected = false;
-}
-
-void loop() 
-{
-	PollIsKeyboardDrawerOpen();
-	HandleMotorModeChange();
-
-	if (bActuateMotor)
-	{
 		digitalWrite(Pin_Motor_Step, HIGH);
 		delayMicroseconds(StepperPulseDuration);
 		digitalWrite(Pin_Motor_Step, LOW);
 		delayMicroseconds(StepperPulseDuration);
+		return false;
+	}
+	else if (bIsDrawerOpen == false && digitalRead(Pin_Switch_LimitMin) == false)
+	{
+		//Retract
+		digitalWrite(Pin_Motor_Direction, GO_DOWN);
+		digitalWrite(Pin_Motor_Enable, MOTOR_ON);
+
+		digitalWrite(Pin_Motor_Step, HIGH);
+		delayMicroseconds(StepperPulseDuration);
+		digitalWrite(Pin_Motor_Step, LOW);
+		delayMicroseconds(StepperPulseDuration);
+		return false;
+	}
+
+	digitalWrite(Pin_Motor_Enable, MOTOR_OFF);
+	return true;
+}
+
+void loop() 
+{
+	if (!bIsProcessing)
+	{
 		return;
 	}
 
-	HandleRaspberryPiPowerState();
-	LowPower.deepSleep();
+	if (const bool bReachedTarget = SeekMotorTowardsTarget())
+	{
+		HandleRaspberryPiPowerState();
+		bIsProcessing = false;
+	}
 }
 
