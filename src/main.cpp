@@ -41,6 +41,12 @@ void setup()
 	pinMode(Pin_Motor_Enable, OUTPUT);
 	pinMode(Pin_RaspPi_Power, OUTPUT);
 
+	//initial state
+	digitalWrite(Pin_Motor_Enable, MOTOR_OFF);
+	digitalWrite(Pin_Motor_Direction, GO_DOWN);
+	digitalWrite(Pin_Motor_Step, false);
+	digitalWrite(Pin_RaspPi_Power, false);
+
 	//Interrupts
 	attachInterrupt(Pin_Switch_LimitMin, OnLimitHit_ISR, RISING);
 	attachInterrupt(Pin_Switch_LimitMin, OnLimitHit_ISR, RISING);
@@ -60,7 +66,7 @@ void HandleRaspberryPiPowerState()
 	bIsRaspberryPiPowered = bShouldRaspberryPiBePowered;
 
 	digitalWrite(Pin_RaspPi_Power, true);
-	delay(500);
+	delay(1000);
 	digitalWrite(Pin_RaspPi_Power, false);
 }
 
@@ -77,7 +83,7 @@ bool SeekMotorTowardsTarget()
 
 		digitalWrite(Pin_Motor_Step, HIGH);
 		delayMicroseconds(StepperPulseDuration);
-		digitalWrite(Pin_Motor_Step, LOW);
+		digitalWrite(Pin_Motor_Step, LOW); 
 		delayMicroseconds(StepperPulseDuration);
 		return false;
 	}
